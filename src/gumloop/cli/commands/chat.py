@@ -186,12 +186,23 @@ def create_completion(
                 lambda client: client.chat.completions.create(**kwargs)
             )
             image_notice_emitted = False
+            stream_error: str | None = None
             for chunk in stream_iter:
                 image_notice_emitted = _emit_stream_chunk(
                     chunk, json_mode=json_output, image_notice_emitted=image_notice_emitted
                 )
+                # Keep the error and any trailing accounting frames in NDJSON,
+                # but do not let an HTTP 200 stream hide a failed completion.
+                if stream_error is None and (
+                    chunk.error is not None or any(choice.finish_reason == "error" for choice in chunk.choices)
+                ):
+                    stream_error = (
+                        chunk.error.message if chunk.error is not None else None
+                    ) or "Chat completion stream failed."
             if not json_output:
                 console.print()  # trailing newline to separate the prompt that follows
+            if stream_error is not None:
+                raise GumloopError(stream_error)
             return
 
         kwargs.pop("stream", None)
@@ -213,6 +224,11 @@ def create_completion(
             console.print(
                 "Generated image available. Use --json to retrieve the image data.", markup=False, highlight=False
             )
+
+
+# ---------------------------------------------------------------------------
+# Helpers: terminal detection and chunk rendering.
+# ---------------------------------------------------------------------------
 
 
 def _stdout_is_tty() -> bool:
@@ -239,3 +255,8 @@ def _emit_stream_chunk(chunk: ChatStreamChunk, *, json_mode: bool = False, image
             )
             image_notice_emitted = True
     return image_notice_emitted
+
+
+# ---------------------------------------------------------------------------
+# End helpers.
+# ---------------------------------------------------------------------------
